@@ -1,0 +1,299 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum CustomerStatus {
+  active
+  paused_indefinite
+  paused_next_meal
+  stopped_no_balance
+  cancelled
+}
+
+enum OrderStatus {
+  pending
+  confirmed
+  paused
+  delivered
+  skipped
+}
+
+enum MealType {
+  breakfast
+  lunch
+  dinner
+}
+
+enum DayOfWeek {
+  Mon
+  Tue
+  Wed
+  Thu
+  Fri
+  Sat
+  Sun
+}
+
+enum PauseType {
+  next_meal
+  indefinite
+  date_range
+}
+
+enum PaymentStatus {
+  created
+  success
+  failed
+}
+
+enum AdminRole {
+  SUPER_ADMIN
+  ADMIN
+  KITCHEN
+}
+
+model Customer {
+  id                    String            @id @default(cuid())
+  name                  String
+  phone                 String            @unique
+  area                  String
+  address               String
+  lat                   Float?
+  lng                   Float?
+  plan_id               String?
+  start_date            DateTime?
+  times_per_day         Int               @default(1)
+  mrp                   Float             @default(0)
+  payment_status        String            @default("pending")
+  total_tiffins_in_plan Int               @default(0)
+  per_tiffin_price      Float             @default(0)
+  tiffins_sent          Int               @default(0)
+  tiffins_remaining     Int               @default(0)
+  additional_charges    Float             @default(0)
+  advance_amount        Float             @default(0)
+  due_amount            Float             @default(0)
+  due_date              DateTime?
+  status                CustomerStatus    @default(active)
+  delivery_partner_id   String?
+  created_at            DateTime          @default(now())
+  updated_at            DateTime          @updatedAt
+
+  plan                  Plan?             @relation(fields: [plan_id], references: [id])
+  delivery_partner      DeliveryPartner?  @relation(fields: [delivery_partner_id], references: [id])
+  daily_orders          DailyOrder[]
+  pause_requests        PauseRequest[]
+  payments              Payment[]
+  push_subscriptions    PushSubscription[]
+  notifications         NotificationLog[]
+
+  @@index([phone])
+  @@index([status])
+  @@index([area])
+}
+
+model Plan {
+  id                    String            @id @default(cuid())
+  code                  String?           @unique
+  name                  String            // "Veg Lite", "Non-Veg Lite", "Veg Prime", "Non-Veg Prime"
+  is_veg                Boolean
+  tier                  String            // "Lite" or "Prime"
+  times_per_week        Int               // 1, 2, or 3
+  duration_days         Int               // 30, 15, 7
+  validity_days         Int               // 40, 45, 20, 10
+  total_price           Float
+  per_tiffin_price      Float
+  total_tiffins_in_plan Int
+  is_short_term         Boolean           @default(false)
+  trial_price           Float?
+
+  day_menus             DayMenuEntry[]
+  customers             Customer[]
+  payments              Payment[]
+
+  @@index([name, tier, times_per_week])
+}
+
+model DailyOrder {
+  id                  String            @id @default(cuid())
+  customer_id         String
+  date                DateTime
+  meal_type           MealType
+  status              OrderStatus       @default(pending)
+  roti_paratha_count  Int               @default(0)
+  delivery_partner_id String?
+  delivered_at        DateTime?
+  created_at          DateTime          @default(now())
+  updated_at          DateTime          @updatedAt
+
+  customer            Customer          @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  delivery_partner    DeliveryPartner?  @relation(fields: [delivery_partner_id], references: [id])
+
+  @@unique([customer_id, date, meal_type])
+  @@index([date, meal_type, status])
+  @@index([delivery_partner_id, date])
+}
+
+model PauseRequest {
+  id          String        @id @default(cuid())
+  customer_id String
+  type        PauseType
+  start_date  DateTime      @default(now())
+  end_date    DateTime?
+  created_at  DateTime      @default(now())
+  resumed_at  DateTime?
+
+  customer    Customer      @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  @@index([customer_id, created_at])
+}
+
+model Payment {
+  id                  String        @id @default(cuid())
+  customer_id         String
+  razorpay_order_id   String        @unique
+  razorpay_payment_id String?       @unique
+  amount              Float
+  currency            String        @default("INR")
+  status              PaymentStatus @default(created)
+  plan_id             String?
+  created_at          DateTime      @default(now())
+  updated_at          DateTime      @updatedAt
+
+  customer            Customer      @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+  plan                Plan?         @relation(fields: [plan_id], references: [id])
+
+  @@index([customer_id])
+  @@index([razorpay_order_id])
+}
+
+model DeliveryPartner {
+  id                 String        @id @default(cuid())
+  name               String
+  phone              String        @unique
+  pin_hash           String?
+  assigned_area      String
+  is_active          Boolean       @default(true)
+  current_lat        Float?
+  current_lng        Float?
+  location_updated_at DateTime?
+  on_duty            Boolean       @default(false)
+  created_at         DateTime      @default(now())
+  updated_at         DateTime      @updatedAt
+
+  customers          Customer[]
+  daily_orders       DailyOrder[]
+  attendance_logs    AttendanceLog[]
+}
+
+model AttendanceLog {
+  id                  String          @id @default(cuid())
+  delivery_partner_id String
+  meal_type           MealType
+  checked_in_at       DateTime        @default(now())
+  lat                 Float
+  lng                 Float
+  date                DateTime        // normalized to start-of-day, for the unique constraint below
+
+  delivery_partner    DeliveryPartner @relation(fields: [delivery_partner_id], references: [id], onDelete: Cascade)
+
+  @@unique([delivery_partner_id, date, meal_type])
+  @@index([date, meal_type])
+}
+
+model AddOn {
+  id              String          @id @default(cuid())
+  name            String          @unique
+  per_unit_price  Float
+  monthly_price   Float?
+  created_at      DateTime        @default(now())
+
+  meal_components MealComponent[]
+}
+
+model DayMenuEntry {
+  id             String          @id @default(cuid())
+  plan_id        String
+  day_of_week    DayOfWeek
+  meal_type      MealType
+  description    String
+  is_highlighted Boolean         @default(false)
+
+  plan           Plan            @relation(fields: [plan_id], references: [id], onDelete: Cascade)
+  components     MealComponent[]
+
+  @@unique([plan_id, day_of_week, meal_type])
+  @@index([day_of_week, meal_type])
+}
+
+model MealComponent {
+  id                String        @id @default(cuid())
+  day_menu_entry_id String
+  name              String
+  addon_id          String?
+
+  day_menu_entry    DayMenuEntry  @relation(fields: [day_menu_entry_id], references: [id], onDelete: Cascade)
+  addon             AddOn?        @relation(fields: [addon_id], references: [id])
+}
+
+model NotificationLog {
+  id          String        @id @default(cuid())
+  customer_id String
+  type        String        // low_balance, payment_due, order_update
+  message     String?
+  sent_at     DateTime      @default(now())
+
+  customer    Customer      @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  @@index([customer_id, type, sent_at])
+}
+
+model PushSubscription {
+  id          String        @id @default(cuid())
+  customer_id String
+  endpoint    String        @unique
+  p256dh      String
+  auth        String
+  created_at  DateTime      @default(now())
+
+  customer    Customer      @relation(fields: [customer_id], references: [id], onDelete: Cascade)
+
+  @@index([customer_id])
+}
+
+model AdminUser {
+  id            String        @id @default(cuid())
+  email         String        @unique
+  password_hash String
+  role          AdminRole     @default(ADMIN)
+  created_at    DateTime      @default(now())
+}
+
+model OtpRequest {
+  id         String        @id @default(cuid())
+  phone      String
+  otp        String
+  expires_at DateTime
+  used       Boolean       @default(false)
+  created_at DateTime      @default(now())
+
+  @@index([phone, created_at])
+}
+
+model AuditLog {
+  id             String      @id @default(cuid())
+  entity_type    String      // Customer, Payment, DailyOrder
+  entity_id      String
+  action         String      // status_change, balance_decremented, payment_success, etc.
+  previous_state String?     // JSON
+  new_state      String?     // JSON
+  metadata       String?     // JSON
+  created_at     DateTime    @default(now())
+
+  @@index([entity_type, entity_id])
+  @@index([action, created_at])
+}
